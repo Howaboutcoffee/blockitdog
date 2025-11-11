@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===========================================================
-# IP采集与屏蔽管理脚本 (Debian12 nftables版)
+# IP采集与屏蔽管理脚本 (Debian12 纯 nftables 持久化版)
 # ===========================================================
 
 LOGFILE="/var/log/tcpping_ips.log"
@@ -8,12 +8,39 @@ NFT_CONF="/etc/nftables.conf"
 PORT=12345
 SAVE_INTERVAL=10
 
+# ------------------- 环境准备：切换为纯 nftables -------------------
+prepare_nft_env() {
+    echo "[CHECK] 检查系统 nftables 环境..."
+
+    # 检测是否在使用 iptables-nft
+    if update-alternatives --query iptables 2>/dev/null | grep -q "iptables-nft"; then
+        echo "[FIX] 检测到系统使用 iptables-nft (兼容层)，正在切换到纯 nftables..."
+
+        update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+        update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
+
+        apt remove -y iptables-nft >/dev/null 2>&1 || true
+
+        echo "[CLEAN] 清空旧 iptables/nftables 规则..."
+        nft flush ruleset || true
+
+        echo "[ENABLE] 启用并启动 nftables 服务..."
+        apt install -y nftables >/dev/null 2>&1
+        systemctl enable --now nftables >/dev/null 2>&1
+
+        echo "[OK] 系统已切换为纯 nftables 模式。"
+        echo
+    else
+        echo "[OK] 系统已在纯 nftables 模式，无需调整。"
+    fi
+}
+
 # ------------------- 初始化 nftables -------------------
 init_nft() {
+    prepare_nft_env
+
     if ! systemctl is-active --quiet nftables; then
         echo "[INIT] 启动 nftables 服务..."
-        apt update -y >/dev/null 2>&1
-        apt install -y nftables >/dev/null 2>&1
         systemctl enable --now nftables >/dev/null 2>&1
     fi
 
@@ -158,7 +185,7 @@ show_blocked() {
 show_menu() {
     clear
     echo "=============================="
-    echo " [IP采集与屏蔽管理脚本 - Debian12 nftables版]"
+    echo " [IP采集与屏蔽管理脚本 - Debian12 纯 nftables版]"
     echo "=============================="
     echo " 1) 实时采集 IP (前台显示)"
     echo " 2) 屏蔽日志中记录的 IP"
