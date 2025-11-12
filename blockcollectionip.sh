@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===========================================================
-# IP采集与屏蔽管理脚本 (Debian12 纯 nftables 持久化版)
+# IP采集与屏蔽管理脚本 (Debian12 纯 nftables 持久化安全版)
 # ===========================================================
 
 LOGFILE="/var/log/tcpping_ips.log"
@@ -12,42 +12,38 @@ SAVE_INTERVAL=10
 prepare_nft_env() {
     echo "[CHECK] 检查系统 nftables 环境..."
 
-    # 检测是否在使用 iptables-nft
-    if update-alternatives --query iptables 2>/dev/null | grep -q "iptables-nft"; then
-        echo "[FIX] 检测到系统使用 iptables-nft (兼容层)，正在切换到纯 nftables..."
+    # 检查 nftables 是否存在
+    if ! command -v nft >/dev/null 2>&1; then
+        echo "[INSTALL] 未检测到 nftables，正在安装..."
+        apt update -y >/dev/null 2>&1
+        apt install -y nftables >/dev/null 2>&1
+    fi
 
+    # 检查是否已在纯 nftables 模式
+    if update-alternatives --query iptables 2>/dev/null | grep -q "iptables-nft"; then
+        echo "[FIX] 检测到系统使用 iptables-nft (兼容层)，正在切换为纯 nftables..."
         update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
         update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
-
         apt remove -y iptables-nft >/dev/null 2>&1 || true
-
-        echo "[CLEAN] 清空旧 iptables/nftables 规则..."
-        nft flush ruleset || true
-
-        echo "[ENABLE] 启用并启动 nftables 服务..."
-        apt install -y nftables >/dev/null 2>&1
-        systemctl enable --now nftables >/dev/null 2>&1
-
-        echo "[OK] 系统已切换为纯 nftables 模式。"
-        echo
+        echo "[OK] 已切换为纯 nftables 模式。"
     else
-        echo "[OK] 系统已在纯 nftables 模式，无需调整。"
+        echo "[OK] 系统已在纯 nftables 模式。"
     fi
+
+    # 确保服务启动
+    systemctl enable --now nftables >/dev/null 2>&1
 }
 
-# ------------------- 初始化 nftables -------------------
+# ------------------- 初始化 nftables（仅首次） -------------------
 init_nft() {
     prepare_nft_env
 
-    if ! systemctl is-active --quiet nftables; then
-        echo "[INIT] 启动 nftables 服务..."
-        systemctl enable --now nftables >/dev/null 2>&1
-    fi
-
+    # 如果 table 不存在则创建
     if ! nft list tables 2>/dev/null | grep -q "inet filter"; then
         echo "[INIT] 创建 nftables 基础结构..."
         cat >"$NFT_CONF" <<'EOF'
 #!/usr/sbin/nft -f
+# nftables initialized by ip-block script
 table inet filter {
     chain input {
         type filter hook input priority 0;
@@ -57,6 +53,8 @@ table inet filter {
 EOF
         systemctl restart nftables
         echo "[OK] 已初始化 nftables 配置。"
+    else
+        echo "[OK] nftables 已存在，无需初始化。"
     fi
 }
 
@@ -159,7 +157,6 @@ block_ips() {
 
 # ------------------- 清空规则 -------------------
 clear_blocks() {
-    init_nft
     echo "[WARN] 确定要清空所有 DROP 规则？(y/n)"
     read -r ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
@@ -174,18 +171,17 @@ clear_blocks() {
 
 # ------------------- 查看当前屏蔽列表 -------------------
 show_blocked() {
-    init_nft
     echo "[INFO] 当前屏蔽 IP 列表："
-    nft list chain inet filter input | grep drop || echo "(无屏蔽规则)"
+    nft list chain inet filter input 2>/dev/null | grep drop || echo "(无屏蔽规则)"
     echo "----------------------------------------"
-    echo "[INFO] 已屏蔽 IP 总数: $(nft list chain inet filter input | grep -c drop)"
+    echo "[INFO] 已屏蔽 IP 总数: $(nft list chain inet filter input 2>/dev/null | grep -c drop)"
 }
 
 # ------------------- 菜单 -------------------
 show_menu() {
     clear
     echo "=============================="
-    echo " [IP采集与屏蔽管理脚本 - Debian12 纯 nftables版]"
+    echo " [IP采集与屏蔽管理脚本 - Debian12 纯 nftables 安全版]"
     echo "=============================="
     echo " 1) 实时采集 IP (前台显示)"
     echo " 2) 屏蔽日志中记录的 IP"
